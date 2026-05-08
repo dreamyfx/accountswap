@@ -1,8 +1,8 @@
 package dev.dreamyfx.accountswap.ui;
 
-import net.minecraft.client.font.TextRenderer;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.text.Text;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.network.chat.Component;
 
 import java.util.List;
 
@@ -10,62 +10,47 @@ public class ContextMenu {
 
     public record Entry(String label, Runnable action) {}
 
-    private final int x, y;
+    private int x, y;
     private final List<Entry> entries;
-    private final TextRenderer textRenderer;
+    private final Font font;
     private boolean visible = true;
 
-    private static final int ENTRY_H = 18;
-    private static final int MENU_W = 120;
+    private static final int W = 120, EH = 18;
 
-    public ContextMenu(int x, int y, List<Entry> entries, TextRenderer textRenderer) {
-        this.x = x;
-        this.y = y;
+    public ContextMenu(int x, int y, List<Entry> entries, Font font) {
+        this.x = x; this.y = y;
         this.entries = entries;
-        this.textRenderer = textRenderer;
+        this.font = font;
     }
 
     public boolean isVisible() { return visible; }
     public void hide() { visible = false; }
 
-    public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
+    public void render(GuiGraphics g, int mx, int my) {
         if (!visible) return;
+        int h = entries.size() * EH + 4;
 
-        int menuH = entries.size() * ENTRY_H + 4;
-
-        // Background
-        ctx.fill(x, y, x + MENU_W, y + menuH, 0xE0141820);
-        // Border
-        ctx.fill(x, y, x + MENU_W, y + 1, 0x60667799);
-        ctx.fill(x, y + menuH - 1, x + MENU_W, y + menuH, 0x40667799);
-        ctx.fill(x, y, x + 1, y + menuH, 0x50667799);
-        ctx.fill(x + MENU_W - 1, y, x + MENU_W, y + menuH, 0x50667799);
+        g.fill(x, y, x + W, y + h, 0xE0141820);
+        g.fill(x, y, x + W, y + 1, 0x60667799);
+        g.fill(x, y + h - 1, x + W, y + h, 0x40667799);
+        g.fill(x, y, x + 1, y + h, 0x50667799);
+        g.fill(x + W - 1, y, x + W, y + h, 0x50667799);
 
         for (int i = 0; i < entries.size(); i++) {
-            int ey = y + 2 + i * ENTRY_H;
-            boolean hovered = mouseX >= x && mouseX < x + MENU_W && mouseY >= ey && mouseY < ey + ENTRY_H;
-            if (hovered) {
-                ctx.fill(x + 1, ey, x + MENU_W - 1, ey + ENTRY_H, 0x50334466);
-            }
-            ctx.drawTextWithShadow(textRenderer, Text.literal(entries.get(i).label()),
-                    x + 8, ey + 5, hovered ? 0xFFFFFFFF : 0xFFCCCCCC);
+            int ey = y + 2 + i * EH;
+            boolean hovered = mx >= x && mx < x + W && my >= ey && my < ey + EH;
+            if (hovered) g.fill(x + 1, ey, x + W - 1, ey + EH, 0x50334466);
+            g.drawString(font, entries.get(i).label(), x + 8, ey + 5, hovered ? 0xFFFFFFFF : 0xFFCCCCCC, false);
         }
     }
 
-    public boolean mouseClicked(int mouseX, int mouseY, int button) {
+    public boolean mouseClicked(int mx, int my) {
         if (!visible) return false;
-        int menuH = entries.size() * ENTRY_H + 4;
-        if (mouseX < x || mouseX > x + MENU_W || mouseY < y || mouseY > y + menuH) {
-            visible = false;
-            return false;
-        }
+        int h = entries.size() * EH + 4;
+        if (mx < x || mx > x + W || my < y || my > y + h) { visible = false; return false; }
         for (int i = 0; i < entries.size(); i++) {
-            int ey = y + 2 + i * ENTRY_H;
-            if (mouseY >= ey && mouseY < ey + ENTRY_H) {
-                entries.get(i).action().run();
-                visible = false;
-                return true;
-            }
+            int ey = y + 2 + i * EH;
+            if (my >= ey && my < ey + EH) { entries.get(i).action().run(); visible = false; return true; }
         }
         return true;
     }

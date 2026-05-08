@@ -1,8 +1,8 @@
 package dev.dreamyfx.accountswap.util;
 
+import com.google.gson.Gson;
 import dev.dreamyfx.accountswap.AccountSwapMod;
 
-import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -17,48 +17,82 @@ public class HttpUtil {
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
+    private static final Gson GSON = new Gson();
+
+    // ── String responses ──────────────────────────────────────────────────────
+
     public static String postForm(String url, String formBody) throws Exception {
-        HttpRequest req = HttpRequest.newBuilder()
+        return send(HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .header("Accept", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(formBody))
                 .timeout(Duration.ofSeconds(20))
-                .build();
-        return send(req);
+                .build());
     }
 
     public static String postJson(String url, String jsonBody) throws Exception {
-        HttpRequest req = HttpRequest.newBuilder()
+        return send(HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                 .timeout(Duration.ofSeconds(20))
-                .build();
-        return send(req);
+                .build());
     }
 
     public static String getWithBearer(String url, String token) throws Exception {
-        HttpRequest req = HttpRequest.newBuilder()
+        return send(HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Authorization", "Bearer " + token)
                 .header("Accept", "application/json")
                 .GET()
                 .timeout(Duration.ofSeconds(20))
-                .build();
-        return send(req);
+                .build());
     }
 
     public static String get(String url) throws Exception {
-        HttpRequest req = HttpRequest.newBuilder()
+        return send(HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Accept", "application/json")
                 .GET()
                 .timeout(Duration.ofSeconds(20))
-                .build();
-        return send(req);
+                .build());
     }
+
+    // ── Gson-deserialized responses (null on any failure) ─────────────────────
+
+    public static <T> T postFormGson(String url, String formBody, Class<T> type) {
+        try {
+            String body = postForm(url, formBody);
+            return GSON.fromJson(body, type);
+        } catch (Exception e) {
+            AccountSwapMod.LOGGER.warn("postFormGson failed for {}: {}", url, e.getMessage());
+            return null;
+        }
+    }
+
+    public static <T> T postJsonGson(String url, String jsonBody, Class<T> type) {
+        try {
+            String body = postJson(url, jsonBody);
+            return GSON.fromJson(body, type);
+        } catch (Exception e) {
+            AccountSwapMod.LOGGER.warn("postJsonGson failed for {}: {}", url, e.getMessage());
+            return null;
+        }
+    }
+
+    public static <T> T getJsonGson(String url, String bearerToken, Class<T> type) {
+        try {
+            String body = getWithBearer(url, bearerToken);
+            return GSON.fromJson(body, type);
+        } catch (Exception e) {
+            AccountSwapMod.LOGGER.warn("getJsonGson failed for {}: {}", url, e.getMessage());
+            return null;
+        }
+    }
+
+    // ── Bytes / stream ────────────────────────────────────────────────────────
 
     public static byte[] getBytes(String url) throws Exception {
         HttpRequest req = HttpRequest.newBuilder()
@@ -68,7 +102,7 @@ public class HttpUtil {
                 .build();
         HttpResponse<byte[]> resp = CLIENT.send(req, HttpResponse.BodyHandlers.ofByteArray());
         if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
-            throw new IOException("HTTP " + resp.statusCode() + " from " + url);
+            throw new java.io.IOException("HTTP " + resp.statusCode() + " from " + url);
         }
         return resp.body();
     }
@@ -81,7 +115,7 @@ public class HttpUtil {
                 .build();
         HttpResponse<InputStream> resp = CLIENT.send(req, HttpResponse.BodyHandlers.ofInputStream());
         if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
-            throw new IOException("HTTP " + resp.statusCode() + " from " + url);
+            throw new java.io.IOException("HTTP " + resp.statusCode() + " from " + url);
         }
         return resp.body();
     }

@@ -1,76 +1,91 @@
 package dev.dreamyfx.accountswap.account;
 
-import java.util.UUID;
+import com.mojang.authlib.minecraft.UserApiService;
+import com.mojang.authlib.yggdrasil.YggdrasilAuthenticationService;
+import dev.dreamyfx.accountswap.AccountSwapMod;
+import dev.dreamyfx.accountswap.mixin.MinecraftClientAccessor;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.User;
+import net.minecraft.client.gui.screens.social.PlayerSocialManager;
+import net.minecraft.client.multiplayer.ProfileKeyPairManager;
+import net.minecraft.client.multiplayer.chat.report.ReportEnvironment;
+import net.minecraft.client.multiplayer.chat.report.ReportingContext;
+import net.minecraft.util.Util;
 
-public class Account {
+import java.util.concurrent.CompletableFuture;
 
-    private String username;
-    private String uuid;
-    private AccountType type;
-    private String accessToken;
-    private String refreshToken;
-    private long tokenExpiry;
-    private boolean active;
+public abstract class Account<T extends Account<?>> {
 
-    public Account() {}
+    protected AccountType type;
+    // For Microsoft: stores the refresh token. For Cracked: stores the username.
+    protected String name;
+    protected final AccountCache cache;
 
-    public Account(String username, String uuid, AccountType type) {
-        this.username = username;
-        this.uuid = uuid;
+    protected Account(AccountType type, String name) {
         this.type = type;
-        this.accessToken = "";
-        this.refreshToken = "";
-        this.tokenExpiry = 0;
-        this.active = false;
+        this.name = name;
+        this.cache = new AccountCache();
     }
 
-    public static Account offline(String username) {
-        UUID offlineUUID = UUID.nameUUIDFromBytes(
-                ("OfflinePlayer:" + username).getBytes(java.nio.charset.StandardCharsets.UTF_8)
-        );
-        Account a = new Account(username, offlineUUID.toString(), AccountType.OFFLINE);
-        a.accessToken = "-";
-        return a;
+    /** Fetches profile info (username, uuid) from remote. Blocking. */
+    public abstract boolean fetchInfo();
+
+    /** Applies the session to Minecraft. Call after fetchInfo() succeeds. */
+    public abstract boolean login();
+
+    public String getUsername() {
+        return cache.username.isEmpty() ? name : cache.username;
     }
 
-    public boolean isTokenExpired() {
-        if (type == AccountType.OFFLINE) return false;
-        return System.currentTimeMillis() > tokenExpiry;
+    public String getUuid() {
+        return cache.uuid;
     }
 
-    public boolean isValid() {
-        if (type == AccountType.OFFLINE) return true;
-        return accessToken != null && !accessToken.isEmpty() && !isTokenExpired();
+    public AccountType getType() {
+        return type;
     }
 
-    public String getUsername() { return username; }
-    public void setUsername(String username) { this.username = username; }
-
-    public String getUuid() { return uuid; }
-    public void setUuid(String uuid) { this.uuid = uuid; }
-
-    public AccountType getType() { return type; }
-    public void setType(AccountType type) { this.type = type; }
-
-    public String getAccessToken() { return accessToken; }
-    public void setAccessToken(String accessToken) { this.accessToken = accessToken; }
-
-    public String getRefreshToken() { return refreshToken; }
-    public void setRefreshToken(String refreshToken) { this.refreshToken = refreshToken; }
-
-    public long getTokenExpiry() { return tokenExpiry; }
-    public void setTokenExpiry(long tokenExpiry) { this.tokenExpiry = tokenExpiry; }
-
-    public boolean isActive() { return active; }
-    public void setActive(boolean active) { this.active = active; }
-
-    public String getDisplayUUID() {
-        if (uuid == null || uuid.length() != 36) return uuid;
-        return uuid.substring(0, 8) + "...";
+    public AccountCache getCache() {
+        return cache;
     }
 
-    @Override
-    public String toString() {
-        return "Account{" + username + ", " + type + ", active=" + active + "}";
+    public String getRawName() {
+        return name;
+    }
+
+    /** Full session injection — sets User plus all associated services. */
+    public static void setSession(User newUser) {
+        Minecraft mc = Minecraft.getInstance();
+        MinecraftClientAccessor acc = (MinecraftClientAccessor) mc;
+
+        acc.setUser(newUser);
+
+        try {
+            YggdrasilAuthenticationService auth = new YggdrasilAuthenticationService(mc.getProxy());
+            UserApiService api = auth.createUserApiService(newUser.getAccessToken());
+
+            acc.setUserApiService(api);
+
+            try { acc.setPlayerSocialManager(new PlayerSocialManager(mc, api)); }
+            catch (Exception e) { AccountSwapMod.LOGGER.warn("PlayerSocialManager update failed", e); }
+
+            try { acc.setProfileKeyPairManager(ProfileKeyPairManager.create(api, newUser, mc.gameDirectory.toPath())); }
+            catch (Exception e) { AccountSwapMod.LOGGER.warn("ProfileKeyPairManager update failed", e); }
+
+            try { acc.setReportingContext(ReportingContext.create(ReportEnvironment.local(), api)); }
+            catch (Exception e) { AccountSwapMod.LOGGER.warn("ReportingContext update failed", e); }
+
+            try {
+                acc.setProfileFuture(CompletableFuture.supplyAsync(
+                        () -> mc.services().sessionService().fetchProfile(mc.getUser().getProfileId(), true),
+                        Util.ioPool()
+                ));
+            } catch (Exception e) { AccountSwapMod.LOGGER.warn("ProfileFuture update failed", e); }
+
+        } catch (Exception e) {
+            AccountSwapMod.LOGGER.error("Session injection partially failed", e);
+        }
+
+        AccountSwapMod.LOGGER.info("Switched session to: {}", newUser.getName());
     }
 }

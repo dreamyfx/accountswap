@@ -1,264 +1,187 @@
 package dev.dreamyfx.accountswap.ui;
 
-import dev.dreamyfx.accountswap.account.Account;
 import dev.dreamyfx.accountswap.account.AccountManager;
-import dev.dreamyfx.accountswap.account.AccountType;
-import dev.dreamyfx.accountswap.auth.AuthResult;
-import dev.dreamyfx.accountswap.auth.MicrosoftAuthFlow;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.text.Text;
+import dev.dreamyfx.accountswap.account.types.CrackedAccount;
+import dev.dreamyfx.accountswap.account.types.MicrosoftAccount;
+import dev.dreamyfx.accountswap.auth.MicrosoftLogin;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
-
-import java.awt.Desktop;
-import java.net.URI;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class AddAccountScreen extends Screen {
 
-    private enum State { CHOOSE, OFFLINE_INPUT, WAITING_BROWSER, SUCCESS, ERROR }
+    private enum State { CHOOSE, OFFLINE_INPUT, WAITING, SUCCESS, ERROR }
 
     private final Screen parent;
     private State state = State.CHOOSE;
 
-    private static final int BOX_W = 360, BOX_H = 210;
+    private static final int W = 360, H = 210;
 
-    // Offline
-    private TextFieldWidget usernameField;
-
-    // Browser flow
-    private final AtomicReference<MicrosoftAuthFlow> activeFlow = new AtomicReference<>();
-    private String statusLine = "Opening your browser...";
-
-    // Result
-    private String successMsg = "";
-    private String errorMsg   = "";
+    private EditBox nameField;
+    private String statusLine = "Opening browser...";
+    private String resultMsg  = "";
+    private boolean authStarted = false;
 
     public AddAccountScreen(Screen parent) {
-        super(Text.translatable("accountswap.add"));
+        super(Component.translatable("accountswap.add"));
         this.parent = parent;
     }
 
     @Override
-    protected void init() {
-        rebuildWidgets();
-    }
+    protected void init() { rebuild(); }
 
-    private void rebuildWidgets() {
-        clearChildren();
-        int bx = boxX(), by = boxY();
+    private void rebuild() {
+        clearWidgets();
+
+        int bx = bx(), by = by();
 
         switch (state) {
             case CHOOSE -> {
-                addDrawableChild(new ModernButton(bx + 30, by + 65, 140, 28,
-                        Text.translatable("accountswap.add.microsoft"),
-                        btn -> startMicrosoft(), ModernButton.Style.PRIMARY));
-
-                addDrawableChild(new ModernButton(bx + 190, by + 65, 140, 28,
-                        Text.translatable("accountswap.add.offline"),
-                        btn -> { state = State.OFFLINE_INPUT; rebuildWidgets(); }));
-
-                addDrawableChild(cancelBtn(bx, by));
+                addRenderableWidget(new ModernButton(bx + 30, by + 60, 140, 28,
+                        Component.translatable("accountswap.add.microsoft"),
+                        this::startMicrosoft, ModernButton.Style.PRIMARY));
+                addRenderableWidget(new ModernButton(bx + 190, by + 60, 140, 28,
+                        Component.translatable("accountswap.add.offline"),
+                        () -> { state = State.OFFLINE_INPUT; rebuild(); }));
+                addRenderableWidget(cancel(bx, by));
             }
-
             case OFFLINE_INPUT -> {
-                usernameField = new TextFieldWidget(textRenderer,
-                        bx + 30, by + 78, BOX_W - 60, 20,
-                        Text.translatable("accountswap.add.username"));
-                usernameField.setMaxLength(16);
-                usernameField.setPlaceholder(Text.literal("Enter username..."));
-                usernameField.setDrawsBackground(false);
-                addDrawableChild(usernameField);
+                nameField = new EditBox(font, bx + 30, by + 78, W - 60, 20, Component.literal(""));
+                nameField.setMaxLength(16);
+                nameField.setHint(Component.literal("Username (2-16 chars)"));
+                nameField.setBordered(false);
+                addRenderableWidget(nameField);
 
-                addDrawableChild(new ModernButton(bx + BOX_W / 2 - 105, by + BOX_H - 38, 100, 22,
-                        Text.translatable("accountswap.add.confirm"),
-                        btn -> addOffline(), ModernButton.Style.PRIMARY));
-                addDrawableChild(new ModernButton(bx + BOX_W / 2 + 5, by + BOX_H - 38, 100, 22,
-                        Text.translatable("accountswap.add.cancel"),
-                        btn -> { state = State.CHOOSE; rebuildWidgets(); }));
+                addRenderableWidget(new ModernButton(bx + W/2 - 105, by + H - 38, 100, 22,
+                        Component.translatable("accountswap.add.confirm"), this::addCracked, ModernButton.Style.PRIMARY));
+                addRenderableWidget(new ModernButton(bx + W/2 + 5, by + H - 38, 100, 22,
+                        Component.translatable("accountswap.add.cancel"), () -> { state = State.CHOOSE; rebuild(); }));
             }
-
-            case WAITING_BROWSER -> {
-                addDrawableChild(new ModernButton(bx + BOX_W / 2 - 50, by + BOX_H - 38, 100, 22,
-                        Text.translatable("accountswap.add.cancel"),
-                        btn -> {
-                            MicrosoftAuthFlow f = activeFlow.get();
-                            if (f != null) f.cancel();
-                            back();
-                        }));
+            case WAITING -> {
+                addRenderableWidget(new ModernButton(bx + W/2 - 50, by + H - 38, 100, 22,
+                        Component.translatable("accountswap.add.cancel"), () -> { MicrosoftLogin.stopServer(); back(); }));
             }
-
             case SUCCESS, ERROR -> {
-                addDrawableChild(new ModernButton(bx + BOX_W / 2 - 50, by + BOX_H - 38, 100, 22,
-                        Text.literal("Done"), btn -> back()));
+                addRenderableWidget(new ModernButton(bx + W/2 - 50, by + H - 38, 100, 22,
+                        Component.literal("Done"), this::back));
             }
         }
     }
 
     private void startMicrosoft() {
-        state = State.WAITING_BROWSER;
-        statusLine = "Opening your browser...";
-        rebuildWidgets();
+        if (authStarted) return;
+        authStarted = true;
+        state = State.WAITING;
+        statusLine = "Opening browser...";
+        rebuild();
 
-        MicrosoftAuthFlow flow = new MicrosoftAuthFlow();
-        activeFlow.set(flow);
+        // startLogin opens browser and starts local server
+        // callback fires when user finishes or cancels
+        MicrosoftLogin.startLogin(refreshToken -> {
+            if (refreshToken == null) {
+                minecraft.execute(() -> { resultMsg = "Sign-in cancelled or failed."; state = State.ERROR; rebuild(); });
+                return;
+            }
+            minecraft.execute(() -> statusLine = "Authenticating...");
 
-        CompletableFuture.runAsync(() -> {
-            try {
-                MicrosoftAuthFlow.BrowserAuthData data = flow.startBrowserFlow();
-
-                // Open system browser
-                try {
-                    if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
-                        Desktop.getDesktop().browse(URI.create(data.authUrl()));
-                    } else {
-                        // Fallback: copy to clipboard
-                        client.execute(() ->
-                                client.keyboard.setClipboard(data.authUrl())
-                        );
-                    }
-                } catch (Exception e) {
-                    client.execute(() -> statusLine = "Could not open browser. URL copied to clipboard.");
-                    client.execute(() -> client.keyboard.setClipboard(data.authUrl()));
-                }
-
-                client.execute(() -> statusLine = "Sign in to your Microsoft account, then return here.");
-
-                AuthResult result = flow.waitForCallback(data.port(), s ->
-                        client.execute(() -> statusLine = s)
-                );
-
-                client.execute(() -> {
-                    if (result.isSuccess()) {
-                        Account acc = new Account(result.getUsername(), result.getUuid(), AccountType.MICROSOFT);
-                        acc.setAccessToken(result.getAccessToken());
-                        acc.setRefreshToken(result.getRefreshToken());
-                        acc.setTokenExpiry(result.getExpiry());
-                        AccountManager.getInstance().addAccount(acc);
-                        successMsg = "Added: " + result.getUsername();
+            // Run auth chain off main thread
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                MicrosoftAccount acc = new MicrosoftAccount(refreshToken);
+                boolean ok = acc.fetchInfo();
+                minecraft.execute(() -> {
+                    if (ok) {
+                        AccountManager.get().add(acc);
+                        resultMsg = "Added: " + acc.getUsername();
                         state = State.SUCCESS;
                     } else {
-                        errorMsg = result.getError();
+                        resultMsg = "Authentication failed.";
                         state = State.ERROR;
                     }
-                    rebuildWidgets();
+                    rebuild();
                 });
-
-            } catch (Exception e) {
-                client.execute(() -> {
-                    errorMsg = e.getMessage();
-                    state = State.ERROR;
-                    rebuildWidgets();
-                });
-            }
+            });
         });
     }
 
-    private void addOffline() {
-        if (usernameField == null) return;
-        String name = usernameField.getText().trim();
+    private void addCracked() {
+        String name = nameField != null ? nameField.getValue().trim() : "";
         if (name.length() < 2) return;
-        AccountManager.getInstance().addAccount(Account.offline(name));
+        CrackedAccount acc = new CrackedAccount(name);
+        acc.fetchInfo();
+        AccountManager.get().add(acc);
         back();
     }
 
-    private void back() {
-        MicrosoftAuthFlow f = activeFlow.get();
-        if (f != null) f.cancel();
-        client.setScreen(parent);
+    private void back() { minecraft.setScreen(parent); }
+
+    private ModernButton cancel(int bx, int by) {
+        return new ModernButton(bx + W/2 - 50, by + H - 38, 100, 22,
+                Component.translatable("accountswap.add.cancel"), this::back);
     }
 
-    // ── Rendering ────────────────────────────────────────────────────────────
+    // ── Rendering ─────────────────────────────────────────────────────────────
 
     @Override
-    public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
-        ctx.fill(0, 0, width, height, 0x90000000);
+    public void render(GuiGraphics g, int mx, int my, float delta) {
+        g.fill(0, 0, width, height, 0x90000000);
+        int bx = bx(), by = by();
+        box(g, bx, by, W, H);
 
-        int bx = boxX(), by = boxY();
-        drawBox(ctx, bx, by, BOX_W, BOX_H);
-
-        // Title
-        ctx.drawCenteredTextWithShadow(textRenderer,
-                Text.translatable("accountswap.add"), bx + BOX_W / 2, by + 12, 0xFFDDDDDD);
-        ctx.fill(bx + 10, by + 26, bx + BOX_W - 10, by + 27, 0x30FFFFFF);
+        g.drawString(font, getMessage(), bx + W/2 - font.width(getMessage())/2, by + 12, 0xFFDDDDDD, true);
+        g.fill(bx + 10, by + 26, bx + W - 10, by + 27, 0x30FFFFFF);
 
         switch (state) {
             case CHOOSE -> {
-                ctx.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("Choose account type:"), bx + BOX_W / 2, by + 46, 0xFF888888);
-                ctx.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("Microsoft  —  real account, browser sign-in"),
-                        bx + BOX_W / 2, by + 56, 0xFF555555);
+                g.drawString(font, "Microsoft — sign in with your browser", bx + W/2 - font.width("Microsoft — sign in with your browser")/2, by + 46, 0xFF555555, false);
             }
             case OFFLINE_INPUT -> {
-                ctx.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("Offline / Cracked"), bx + BOX_W / 2, by + 44, 0xFF888888);
-                ctx.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("Enter a username (2–16 characters):"),
-                        bx + BOX_W / 2, by + 56, 0xFF555555);
-                // Field bg
-                ctx.fill(bx + 28, by + 75, bx + BOX_W - 28, by + 101, 0x50000000);
-                ctx.fill(bx + 28, by + 75, bx + BOX_W - 28, by + 76, 0x50AAAAAA);
+                g.drawString(font, "Offline / Cracked account", bx + W/2 - font.width("Offline / Cracked account")/2, by + 46, 0xFF888888, false);
+                g.fill(bx + 28, by + 75, bx + W - 28, by + 101, 0x50000000);
+                g.fill(bx + 28, by + 75, bx + W - 28, by + 76, 0x50AAAAAA);
             }
-            case WAITING_BROWSER -> {
-                drawSpinner(ctx, bx + BOX_W / 2, by + 65);
-                ctx.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal(statusLine), bx + BOX_W / 2, by + 85, 0xFF888888);
-                ctx.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("Your browser should have opened."),
-                        bx + BOX_W / 2, by + 100, 0xFF555555);
-                ctx.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("Sign in, then this screen will update automatically."),
-                        bx + BOX_W / 2, by + 112, 0xFF555555);
+            case WAITING -> {
+                spinner(g, bx + W/2, by + 65);
+                g.drawString(font, statusLine, bx + W/2 - font.width(statusLine)/2, by + 82, 0xFF888888, false);
+                String sub = "Sign in to your browser, then return here.";
+                g.drawString(font, sub, bx + W/2 - font.width(sub)/2, by + 96, 0xFF555555, false);
             }
             case SUCCESS ->
-                ctx.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("§a✔ " + successMsg), bx + BOX_W / 2, by + BOX_H / 2 - 10, 0xFFFFFFFF);
+                g.drawString(font, "§a✔ " + resultMsg, bx + W/2 - font.width("✔ " + resultMsg)/2 - 4, by + H/2 - 10, 0xFFFFFFFF, true);
             case ERROR -> {
-                ctx.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("§c✘ Failed"), bx + BOX_W / 2, by + BOX_H / 2 - 22, 0xFFFFFFFF);
-                int ly = by + BOX_H / 2 - 6;
-                for (var line : textRenderer.wrapLines(Text.literal(errorMsg), BOX_W - 40)) {
-                    ctx.drawCenteredTextWithShadow(textRenderer, line, bx + BOX_W / 2, ly, 0xFFAA4444);
-                    ly += 10;
-                }
+                g.drawString(font, "§c✘ Failed", bx + W/2 - font.width("✘ Failed")/2 - 4, by + H/2 - 22, 0xFFFFFFFF, true);
+                g.drawString(font, resultMsg, bx + W/2 - font.width(resultMsg)/2, by + H/2 - 6, 0xFFAA4444, false);
             }
         }
 
-        super.render(ctx, mouseX, mouseY, delta);
+        super.render(g, mx, my, delta);
     }
 
-    private void drawBox(DrawContext ctx, int x, int y, int w, int h) {
-        ctx.fill(x + 2, y, x + w - 2, y + h, 0xD0101418);
-        ctx.fill(x, y + 2, x + 2, y + h - 2, 0xD0101418);
-        ctx.fill(x + w - 2, y + 2, x + w, y + h - 2, 0xD0101418);
-        ctx.fill(x + 2, y, x + w - 2, y + 1, 0x60667799);
-        ctx.fill(x, y + 2, x + 1, y + h - 2, 0x40667799);
-        ctx.fill(x + w - 1, y + 2, x + w, y + h - 2, 0x40667799);
+    private void box(GuiGraphics g, int x, int y, int w, int h) {
+        g.fill(x + 2, y, x + w - 2, y + h, 0xD0101418);
+        g.fill(x, y + 2, x + 2, y + h - 2, 0xD0101418);
+        g.fill(x + w - 2, y + 2, x + w, y + h - 2, 0xD0101418);
+        g.fill(x + 2, y, x + w - 2, y + 1, 0x60667799);
+        g.fill(x, y + 2, x + 1, y + h - 2, 0x40667799);
+        g.fill(x + w - 1, y + 2, x + w, y + h - 2, 0x40667799);
     }
 
-    private void drawSpinner(DrawContext ctx, int cx, int cy) {
+    private void spinner(GuiGraphics g, int cx, int cy) {
         String[] f = {"|", "/", "—", "\\", "|", "/", "—", "\\"};
-        ctx.drawCenteredTextWithShadow(textRenderer,
-                Text.literal(f[(int)((System.currentTimeMillis() % 800) / 100)]), cx, cy, 0xFF88AAFF);
+        String ch = f[(int)((System.currentTimeMillis() % 800) / 100)];
+        g.drawString(font, ch, cx - font.width(ch)/2, cy, 0xFF88AAFF, false);
     }
 
-    private ModernButton cancelBtn(int bx, int by) {
-        return new ModernButton(bx + BOX_W / 2 - 50, by + BOX_H - 38, 100, 22,
-                Text.translatable("accountswap.add.cancel"), btn -> back());
-    }
-
-    private int boxX() { return (width  - BOX_W) / 2; }
-    private int boxY() { return (height - BOX_H) / 2; }
+    private int bx() { return (width  - W) / 2; }
+    private int by() { return (height - H) / 2; }
 
     @Override
     public boolean keyPressed(int key, int scan, int mods) {
-        if (key == GLFW.GLFW_KEY_ESCAPE) { back(); return true; }
-        if (key == GLFW.GLFW_KEY_ENTER && state == State.OFFLINE_INPUT) { addOffline(); return true; }
+        if (key == GLFW.GLFW_KEY_ESCAPE) { MicrosoftLogin.stopServer(); back(); return true; }
+        if (key == GLFW.GLFW_KEY_ENTER && state == State.OFFLINE_INPUT) { addCracked(); return true; }
         return super.keyPressed(key, scan, mods);
     }
 
-    @Override public boolean shouldPause() { return false; }
+    @Override public boolean isPauseScreen() { return false; }
 }

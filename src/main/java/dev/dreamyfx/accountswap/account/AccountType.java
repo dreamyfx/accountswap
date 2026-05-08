@@ -1,16 +1,12 @@
 package dev.dreamyfx.accountswap.account;
 
 public enum AccountType {
-    MICROSOFT("Microsoft"),
-    OFFLINE("Offline");
+    Microsoft("Microsoft"),
+    Cracked("Offline");
 
-    private final String displayName;
+    public final String displayName;
 
     AccountType(String displayName) {
         this.displayName = displayName;
-    }
-
-    public String getDisplayName() {
-        return displayName;
     }
 }
