@@ -4,47 +4,37 @@ import dev.dreamyfx.accountswap.account.Account;
 import dev.dreamyfx.accountswap.account.AccountManager;
 import dev.dreamyfx.accountswap.account.AccountType;
 import dev.dreamyfx.accountswap.auth.AuthResult;
-import dev.dreamyfx.accountswap.auth.DeviceCodeResponse;
 import dev.dreamyfx.accountswap.auth.MicrosoftAuthFlow;
-import dev.dreamyfx.accountswap.storage.AccountStorage;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
 
-import java.awt.*;
+import java.awt.Desktop;
 import java.net.URI;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class AddAccountScreen extends Screen {
 
-    private enum State { CHOOSE, OFFLINE_INPUT, DEVICE_CODE, POLLING, SUCCESS, ERROR }
+    private enum State { CHOOSE, OFFLINE_INPUT, WAITING_BROWSER, SUCCESS, ERROR }
 
     private final Screen parent;
     private State state = State.CHOOSE;
 
-    private int boxW = 360, boxH = 220;
-    private int boxX, boxY;
+    private static final int BOX_W = 360, BOX_H = 210;
 
     // Offline
     private TextFieldWidget usernameField;
 
-    // Device code
-    private String userCode = "";
-    private String verificationUri = "";
-    private String pollStatus = "Waiting for sign-in...";
-    private AtomicReference<MicrosoftAuthFlow> activeFlow = new AtomicReference<>();
-    private boolean codeCopied = false;
-    private long codeCopiedTime = 0;
+    // Browser flow
+    private final AtomicReference<MicrosoftAuthFlow> activeFlow = new AtomicReference<>();
+    private String statusLine = "Opening your browser...";
 
     // Result
-    private String errorMsg = "";
     private String successMsg = "";
-
-    // Animation
-    private float fadeAnim = 0f;
+    private String errorMsg   = "";
 
     public AddAccountScreen(Screen parent) {
         super(Text.translatable("accountswap.add"));
@@ -53,72 +43,45 @@ public class AddAccountScreen extends Screen {
 
     @Override
     protected void init() {
-        boxX = (width - boxW) / 2;
-        boxY = (height - boxH) / 2;
         rebuildWidgets();
     }
 
     private void rebuildWidgets() {
         clearChildren();
-        boxX = (width - boxW) / 2;
-        boxY = (height - boxH) / 2;
+        int bx = boxX(), by = boxY();
 
         switch (state) {
             case CHOOSE -> {
-                addDrawableChild(new ModernButton(boxX + 30, boxY + 70, 140, 28,
+                addDrawableChild(new ModernButton(bx + 30, by + 65, 140, 28,
                         Text.translatable("accountswap.add.microsoft"),
                         btn -> startMicrosoft(), ModernButton.Style.PRIMARY));
 
-                addDrawableChild(new ModernButton(boxX + 190, boxY + 70, 140, 28,
+                addDrawableChild(new ModernButton(bx + 190, by + 65, 140, 28,
                         Text.translatable("accountswap.add.offline"),
-                        btn -> {
-                            state = State.OFFLINE_INPUT;
-                            rebuildWidgets();
-                        }));
+                        btn -> { state = State.OFFLINE_INPUT; rebuildWidgets(); }));
 
-                addDrawableChild(new ModernButton(boxX + boxW / 2 - 50, boxY + boxH - 38, 100, 22,
-                        Text.translatable("accountswap.add.cancel"),
-                        btn -> back()));
+                addDrawableChild(cancelBtn(bx, by));
             }
 
             case OFFLINE_INPUT -> {
                 usernameField = new TextFieldWidget(textRenderer,
-                        boxX + 30, boxY + 80, boxW - 60, 20,
+                        bx + 30, by + 78, BOX_W - 60, 20,
                         Text.translatable("accountswap.add.username"));
-                usernameField.setMaxLength(32);
+                usernameField.setMaxLength(16);
                 usernameField.setPlaceholder(Text.literal("Enter username..."));
                 usernameField.setDrawsBackground(false);
                 addDrawableChild(usernameField);
 
-                addDrawableChild(new ModernButton(boxX + boxW / 2 - 105, boxY + boxH - 38, 100, 22,
+                addDrawableChild(new ModernButton(bx + BOX_W / 2 - 105, by + BOX_H - 38, 100, 22,
                         Text.translatable("accountswap.add.confirm"),
-                        btn -> addOfflineAccount(), ModernButton.Style.PRIMARY));
-
-                addDrawableChild(new ModernButton(boxX + boxW / 2 + 5, boxY + boxH - 38, 100, 22,
+                        btn -> addOffline(), ModernButton.Style.PRIMARY));
+                addDrawableChild(new ModernButton(bx + BOX_W / 2 + 5, by + BOX_H - 38, 100, 22,
                         Text.translatable("accountswap.add.cancel"),
                         btn -> { state = State.CHOOSE; rebuildWidgets(); }));
             }
 
-            case DEVICE_CODE -> {
-                addDrawableChild(new ModernButton(boxX + boxW / 2 - 60, boxY + 120, 120, 22,
-                        Text.literal(codeCopied ? "Copied!" : "Copy Code"),
-                        btn -> {
-                            client.keyboard.setClipboard(userCode);
-                            codeCopied = true;
-                            codeCopiedTime = System.currentTimeMillis();
-                        }, ModernButton.Style.GHOST));
-
-                addDrawableChild(new ModernButton(boxX + boxW / 2 - 50, boxY + boxH - 38, 100, 22,
-                        Text.translatable("accountswap.add.cancel"),
-                        btn -> {
-                            MicrosoftAuthFlow f = activeFlow.get();
-                            if (f != null) f.cancel();
-                            back();
-                        }));
-            }
-
-            case POLLING -> {
-                addDrawableChild(new ModernButton(boxX + boxW / 2 - 50, boxY + boxH - 38, 100, 22,
+            case WAITING_BROWSER -> {
+                addDrawableChild(new ModernButton(bx + BOX_W / 2 - 50, by + BOX_H - 38, 100, 22,
                         Text.translatable("accountswap.add.cancel"),
                         btn -> {
                             MicrosoftAuthFlow f = activeFlow.get();
@@ -128,44 +91,44 @@ public class AddAccountScreen extends Screen {
             }
 
             case SUCCESS, ERROR -> {
-                addDrawableChild(new ModernButton(boxX + boxW / 2 - 50, boxY + boxH - 38, 100, 22,
+                addDrawableChild(new ModernButton(bx + BOX_W / 2 - 50, by + BOX_H - 38, 100, 22,
                         Text.literal("Done"), btn -> back()));
             }
         }
     }
 
     private void startMicrosoft() {
-        String clientId = AccountStorage.getInstance().getClientId();
-        if (clientId == null || clientId.isBlank()) {
-            client.setScreen(new ConfigScreen(this));
-            return;
-        }
-
-        MicrosoftAuthFlow flow = new MicrosoftAuthFlow(clientId);
-        activeFlow.set(flow);
-        pollStatus = "Starting device flow...";
-        state = State.POLLING;
+        state = State.WAITING_BROWSER;
+        statusLine = "Opening your browser...";
         rebuildWidgets();
+
+        MicrosoftAuthFlow flow = new MicrosoftAuthFlow();
+        activeFlow.set(flow);
 
         CompletableFuture.runAsync(() -> {
             try {
-                DeviceCodeResponse dcr = flow.startDeviceFlow();
-                client.execute(() -> {
-                    userCode = dcr.userCode;
-                    verificationUri = dcr.verificationUri;
-                    state = State.DEVICE_CODE;
-                    rebuildWidgets();
+                MicrosoftAuthFlow.BrowserAuthData data = flow.startBrowserFlow();
 
-                    // Open browser
-                    try {
-                        if (Desktop.isDesktopSupported()) {
-                            Desktop.getDesktop().browse(URI.create(dcr.verificationUri));
-                        }
-                    } catch (Exception ignored) {}
-                });
+                // Open system browser
+                try {
+                    if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                        Desktop.getDesktop().browse(URI.create(data.authUrl()));
+                    } else {
+                        // Fallback: copy to clipboard
+                        client.execute(() ->
+                                client.keyboard.setClipboard(data.authUrl())
+                        );
+                    }
+                } catch (Exception e) {
+                    client.execute(() -> statusLine = "Could not open browser. URL copied to clipboard.");
+                    client.execute(() -> client.keyboard.setClipboard(data.authUrl()));
+                }
 
-                AuthResult result = flow.pollForToken(dcr, status ->
-                        client.execute(() -> pollStatus = status));
+                client.execute(() -> statusLine = "Sign in to your Microsoft account, then return here.");
+
+                AuthResult result = flow.waitForCallback(data.port(), s ->
+                        client.execute(() -> statusLine = s)
+                );
 
                 client.execute(() -> {
                     if (result.isSuccess()) {
@@ -182,6 +145,7 @@ public class AddAccountScreen extends Screen {
                     }
                     rebuildWidgets();
                 });
+
             } catch (Exception e) {
                 client.execute(() -> {
                     errorMsg = e.getMessage();
@@ -192,11 +156,11 @@ public class AddAccountScreen extends Screen {
         });
     }
 
-    private void addOfflineAccount() {
-        String name = usernameField != null ? usernameField.getText().trim() : "";
-        if (name.isEmpty() || name.length() < 2) return;
-        Account acc = Account.offline(name);
-        AccountManager.getInstance().addAccount(acc);
+    private void addOffline() {
+        if (usernameField == null) return;
+        String name = usernameField.getText().trim();
+        if (name.length() < 2) return;
+        AccountManager.getInstance().addAccount(Account.offline(name));
         back();
     }
 
@@ -206,128 +170,95 @@ public class AddAccountScreen extends Screen {
         client.setScreen(parent);
     }
 
+    // ── Rendering ────────────────────────────────────────────────────────────
+
     @Override
-    public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-        fadeAnim = Math.min(1f, fadeAnim + delta * 0.15f);
+    public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
+        ctx.fill(0, 0, width, height, 0x90000000);
 
-        // Dark backdrop
-        context.fill(0, 0, width, height, 0x90000000);
-
-        // Box
-        drawBox(context, boxX, boxY, boxW, boxH);
+        int bx = boxX(), by = boxY();
+        drawBox(ctx, bx, by, BOX_W, BOX_H);
 
         // Title
-        context.drawCenteredTextWithShadow(textRenderer,
-                Text.translatable("accountswap.add"), boxX + boxW / 2, boxY + 14, 0xFFDDDDDD);
+        ctx.drawCenteredTextWithShadow(textRenderer,
+                Text.translatable("accountswap.add"), bx + BOX_W / 2, by + 12, 0xFFDDDDDD);
+        ctx.fill(bx + 10, by + 26, bx + BOX_W - 10, by + 27, 0x30FFFFFF);
 
-        // Divider
-        context.fill(boxX + 10, boxY + 28, boxX + boxW - 10, boxY + 29, 0x30FFFFFF);
-
-        // Content based on state
         switch (state) {
             case CHOOSE -> {
-                context.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("Choose account type:"),
-                        boxX + boxW / 2, boxY + 50, 0xFFAAAAAA);
+                ctx.drawCenteredTextWithShadow(textRenderer,
+                        Text.literal("Choose account type:"), bx + BOX_W / 2, by + 46, 0xFF888888);
+                ctx.drawCenteredTextWithShadow(textRenderer,
+                        Text.literal("Microsoft  —  real account, browser sign-in"),
+                        bx + BOX_W / 2, by + 56, 0xFF555555);
             }
             case OFFLINE_INPUT -> {
-                context.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("Enter a username:"),
-                        boxX + boxW / 2, boxY + 58, 0xFFAAAAAA);
-                // Search field bg
-                context.fill(boxX + 28, boxY + 78, boxX + boxW - 28, boxY + 102, 0x50000000);
-                context.fill(boxX + 28, boxY + 78, boxX + boxW - 28, boxY + 79, 0x50AAAAAA);
+                ctx.drawCenteredTextWithShadow(textRenderer,
+                        Text.literal("Offline / Cracked"), bx + BOX_W / 2, by + 44, 0xFF888888);
+                ctx.drawCenteredTextWithShadow(textRenderer,
+                        Text.literal("Enter a username (2–16 characters):"),
+                        bx + BOX_W / 2, by + 56, 0xFF555555);
+                // Field bg
+                ctx.fill(bx + 28, by + 75, bx + BOX_W - 28, by + 101, 0x50000000);
+                ctx.fill(bx + 28, by + 75, bx + BOX_W - 28, by + 76, 0x50AAAAAA);
             }
-            case DEVICE_CODE -> {
-                context.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("Open in browser:"),
-                        boxX + boxW / 2, boxY + 42, 0xFFAAAAAA);
-                context.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal(verificationUri),
-                        boxX + boxW / 2, boxY + 56, 0xFF88AAFF);
-
-                context.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("Enter code:"),
-                        boxX + boxW / 2, boxY + 76, 0xFFAAAAAA);
-
-                // Big code display
-                drawCodeBox(context, userCode, boxX + boxW / 2, boxY + 90);
-
-                context.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("Waiting for sign-in..."),
-                        boxX + boxW / 2, boxY + 150, 0xFF666666);
+            case WAITING_BROWSER -> {
+                drawSpinner(ctx, bx + BOX_W / 2, by + 65);
+                ctx.drawCenteredTextWithShadow(textRenderer,
+                        Text.literal(statusLine), bx + BOX_W / 2, by + 85, 0xFF888888);
+                ctx.drawCenteredTextWithShadow(textRenderer,
+                        Text.literal("Your browser should have opened."),
+                        bx + BOX_W / 2, by + 100, 0xFF555555);
+                ctx.drawCenteredTextWithShadow(textRenderer,
+                        Text.literal("Sign in, then this screen will update automatically."),
+                        bx + BOX_W / 2, by + 112, 0xFF555555);
             }
-            case POLLING -> {
-                drawSpinner(context, boxX + boxW / 2, boxY + boxH / 2 - 20);
-                context.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal(pollStatus),
-                        boxX + boxW / 2, boxY + boxH / 2 + 10, 0xFFAAAAAA);
-            }
-            case SUCCESS -> {
-                context.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("§a✔ " + successMsg),
-                        boxX + boxW / 2, boxY + boxH / 2 - 10, 0xFFFFFFFF);
-            }
+            case SUCCESS ->
+                ctx.drawCenteredTextWithShadow(textRenderer,
+                        Text.literal("§a✔ " + successMsg), bx + BOX_W / 2, by + BOX_H / 2 - 10, 0xFFFFFFFF);
             case ERROR -> {
-                context.drawCenteredTextWithShadow(textRenderer,
-                        Text.literal("§c✘ Authentication Failed"),
-                        boxX + boxW / 2, boxY + boxH / 2 - 20, 0xFFFFFFFF);
-                // Word-wrap error
-                int lineY = boxY + boxH / 2;
-                for (var line : textRenderer.wrapLines(Text.literal(errorMsg), boxW - 40)) {
-                    context.drawCenteredTextWithShadow(textRenderer, line,
-                            boxX + boxW / 2, lineY, 0xFFAA4444);
-                    lineY += 10;
+                ctx.drawCenteredTextWithShadow(textRenderer,
+                        Text.literal("§c✘ Failed"), bx + BOX_W / 2, by + BOX_H / 2 - 22, 0xFFFFFFFF);
+                int ly = by + BOX_H / 2 - 6;
+                for (var line : textRenderer.wrapLines(Text.literal(errorMsg), BOX_W - 40)) {
+                    ctx.drawCenteredTextWithShadow(textRenderer, line, bx + BOX_W / 2, ly, 0xFFAA4444);
+                    ly += 10;
                 }
             }
         }
 
-        super.render(context, mouseX, mouseY, delta);
+        super.render(ctx, mouseX, mouseY, delta);
     }
 
     private void drawBox(DrawContext ctx, int x, int y, int w, int h) {
-        // Background
         ctx.fill(x + 2, y, x + w - 2, y + h, 0xD0101418);
         ctx.fill(x, y + 2, x + 2, y + h - 2, 0xD0101418);
         ctx.fill(x + w - 2, y + 2, x + w, y + h - 2, 0xD0101418);
-
-        // Border
         ctx.fill(x + 2, y, x + w - 2, y + 1, 0x60667799);
-        ctx.fill(x + 2, y + h - 1, x + w - 2, y + h, 0x30667799);
         ctx.fill(x, y + 2, x + 1, y + h - 2, 0x40667799);
         ctx.fill(x + w - 1, y + 2, x + w, y + h - 2, 0x40667799);
     }
 
-    private void drawCodeBox(DrawContext ctx, String code, int cx, int y) {
-        int cw = textRenderer.getWidth(code) * 2 + 24;
-        int x = cx - cw / 2;
-        ctx.fill(x, y, x + cw, y + 20, 0x80001122);
-        ctx.fill(x, y, x + cw, y + 1, 0x8088AAFF);
-        ctx.fill(x, y + 19, x + cw, y + 20, 0x8088AAFF);
-
-        ctx.getMatrices().push();
-        ctx.getMatrices().translate(cx, y + 6, 0);
-        ctx.getMatrices().scale(2f, 2f, 1f);
-        ctx.drawCenteredTextWithShadow(textRenderer, Text.literal(code), 0, 0, 0xFFEECC44);
-        ctx.getMatrices().pop();
-    }
-
     private void drawSpinner(DrawContext ctx, int cx, int cy) {
-        long t = System.currentTimeMillis() % 800;
-        int frame = (int)(t / 100);
-        String[] frames = {"|", "/", "—", "\\", "|", "/", "—", "\\"};
-        ctx.drawCenteredTextWithShadow(textRenderer, Text.literal(frames[frame]), cx, cy, 0xFF88AAFF);
+        String[] f = {"|", "/", "—", "\\", "|", "/", "—", "\\"};
+        ctx.drawCenteredTextWithShadow(textRenderer,
+                Text.literal(f[(int)((System.currentTimeMillis() % 800) / 100)]), cx, cy, 0xFF88AAFF);
     }
 
-    @Override
-    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        if (keyCode == GLFW.GLFW_KEY_ESCAPE) { back(); return true; }
-        if (keyCode == GLFW.GLFW_KEY_ENTER && state == State.OFFLINE_INPUT) {
-            addOfflineAccount(); return true;
-        }
-        return super.keyPressed(keyCode, scanCode, modifiers);
+    private ModernButton cancelBtn(int bx, int by) {
+        return new ModernButton(bx + BOX_W / 2 - 50, by + BOX_H - 38, 100, 22,
+                Text.translatable("accountswap.add.cancel"), btn -> back());
     }
 
+    private int boxX() { return (width  - BOX_W) / 2; }
+    private int boxY() { return (height - BOX_H) / 2; }
+
     @Override
-    public boolean shouldPause() { return false; }
+    public boolean keyPressed(int key, int scan, int mods) {
+        if (key == GLFW.GLFW_KEY_ESCAPE) { back(); return true; }
+        if (key == GLFW.GLFW_KEY_ENTER && state == State.OFFLINE_INPUT) { addOffline(); return true; }
+        return super.keyPressed(key, scan, mods);
+    }
+
+    @Override public boolean shouldPause() { return false; }
 }

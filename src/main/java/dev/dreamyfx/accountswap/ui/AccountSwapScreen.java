@@ -454,19 +454,14 @@ public class AccountSwapScreen extends Screen {
 
     private void refreshSelected() {
         if (selected == null || selected.getType() != dev.dreamyfx.accountswap.account.AccountType.MICROSOFT) return;
-        String clientId = AccountStorage.getInstance().getClientId();
-        if (clientId == null || clientId.isBlank()) {
-            client.setScreen(new ConfigScreen(this));
-            return;
-        }
 
         showStatus("Refreshing token...");
         String refreshToken = selected.getRefreshToken();
         final Account target = selected;
 
         java.util.concurrent.CompletableFuture.runAsync(() -> {
-            MicrosoftAuthFlow flow = new MicrosoftAuthFlow(clientId);
-            AuthResult result = flow.refreshToken(refreshToken);
+            MicrosoftAuthFlow flow = new MicrosoftAuthFlow();
+            AuthResult result = flow.refresh(refreshToken);
             client.execute(() -> {
                 if (result.isSuccess()) {
                     target.setAccessToken(result.getAccessToken());

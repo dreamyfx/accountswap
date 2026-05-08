@@ -93,26 +93,4 @@ public class AccountStorage {
         }
     }
 
-    public String getClientId() {
-        try {
-            Path cfgFile = configDir.resolve("config.json");
-            if (!Files.exists(cfgFile)) return null;
-            JsonObject obj = JsonParser.parseString(Files.readString(cfgFile)).getAsJsonObject();
-            return obj.has("clientId") ? obj.get("clientId").getAsString() : null;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    public void saveClientId(String clientId) {
-        try {
-            Files.createDirectories(configDir);
-            Path cfgFile = configDir.resolve("config.json");
-            JsonObject obj = new JsonObject();
-            obj.addProperty("clientId", clientId);
-            Files.writeString(cfgFile, gson.toJson(obj));
-        } catch (Exception e) {
-            AccountSwapMod.LOGGER.error("Failed to save config", e);
-        }
-    }
 }
