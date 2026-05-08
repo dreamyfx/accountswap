@@ -1,0 +1,115 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v3
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: wrapper
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Build with Gradle
+        run: ./gradlew build --no-daemon
+
+      - name: Capture build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: accountswap-jars
+          path: |
+            build/libs/*.jar
+            !build/libs/*-sources.jar
+          retention-days: 30
+
+      - name: Upload sources jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: accountswap-sources
+          path: build/libs/*-sources.jar
+          retention-days: 30
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: wrapper
+
+      - name: Build release jar
+        run: ./gradlew build --no-daemon
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          if [ -f CHANGELOG.md ]; then
+            # Extract section between first two version headers
+            awk '/^## \[/{if(p)exit; p=1} p' CHANGELOG.md > release_notes.txt
+          else
+            echo "Release ${{ github.ref_name }}" > release_notes.txt
+            echo "" >> release_notes.txt
+            echo "See [README](https://github.com/${{ github.repository }}/blob/main/README.md) for full documentation." >> release_notes.txt
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "AccountSwap ${{ github.ref_name }}"
+          body_path: release_notes.txt
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-rc') }}
+          files: |
+            build/libs/accountswap-*.jar
+            !build/libs/accountswap-*-sources.jar
+          generate_release_notes: true
