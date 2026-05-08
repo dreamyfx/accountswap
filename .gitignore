@@ -10,3 +10,5 @@ out/
 *.iws
 .DS_Store
 run/
+meteor-client/
+.claude/
