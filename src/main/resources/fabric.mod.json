@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "accountswap",
+  "version": "${version}",
+  "name": "AccountSwap",
+  "description": "Modern Minecraft account manager with full Microsoft auth support.",
+  "authors": ["dreamyfx"],
+  "contact": {
+    "sources": "https://github.com/dreamyfx/accountswap"
+  },
+  "license": "MIT",
+  "icon": "assets/accountswap/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.dreamyfx.accountswap.AccountSwapMod"]
+  },
+  "mixins": ["accountswap.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "fabric-api": "*",
+    "minecraft": "~1.21.11",
+    "java": ">=21"
+  }
+}

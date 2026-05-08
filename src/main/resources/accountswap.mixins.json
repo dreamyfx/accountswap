@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "package": "dev.dreamyfx.accountswap.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [],
+  "client": [
+    "MinecraftClientAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
